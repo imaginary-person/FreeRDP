@@ -266,6 +266,37 @@ static BOOL xf_event_execute_action_script(xfContext* xfc, const XEvent* event)
 	return TRUE;
 }
 
+void xf_adjust_coordinates_to_screen(xfContext* xfc, UINT32* x, UINT32* y)
+{
+	rdpSettings* settings;
+	INT64 tx, ty;
+
+	if (!xfc || !xfc->context.settings || !y || !x)
+		return;
+
+	settings = xfc->context.settings;
+	tx = *x;
+	ty = *y;
+	if (!xfc->remote_app)
+	{
+#ifdef WITH_XRENDER
+
+		if (xf_picture_transform_required(xfc))
+		{
+			double xScalingFactor = xfc->scaledWidth / (double)settings->DesktopWidth;
+			double yScalingFactor = xfc->scaledHeight / (double)settings->DesktopHeight;
+			tx = ((tx + xfc->offset_x) * xScalingFactor);
+			ty = ((ty + xfc->offset_y) * yScalingFactor);
+		}
+
+#endif
+	}
+
+	CLAMP_COORDINATES(tx, ty);
+	*x = tx;
+	*y = ty;
+}
+
 void xf_event_adjust_coordinates(xfContext* xfc, int* x, int* y)
 {
 	rdpSettings* settings;
@@ -618,6 +649,8 @@ static BOOL xf_event_EnterNotify(xfContext* xfc, const XEnterWindowEvent* event,
 
 static BOOL xf_event_LeaveNotify(xfContext* xfc, const XLeaveWindowEvent* event, BOOL app)
 {
+	if (event->mode == NotifyGrab || event->mode == NotifyUngrab)
+		return TRUE;
 	if (!app)
 	{
 		xfc->mouse_active = FALSE;
@@ -853,7 +886,8 @@ static BOOL xf_event_PropertyNotify(xfContext* xfc, const XPropertyEvent* event,
 				appWindow->rail_state = WINDOW_SHOW_MINIMIZED;
 				xf_rail_send_client_system_command(xfc, appWindow->windowId, SC_MINIMIZE);
 			}
-			else if (!minimized && !maxVert && !maxHorz && (appWindow->rail_state != WINDOW_SHOW) &&
+			else if (((Atom)event->atom == xfc->WM_STATE) && !minimized &&
+			         (appWindow->rail_state != WINDOW_SHOW) &&
 			         (appWindow->rail_state != WINDOW_HIDE))
 			{
 				appWindow->rail_state = WINDOW_SHOW;

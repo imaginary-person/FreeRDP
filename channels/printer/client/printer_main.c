@@ -78,7 +78,8 @@ static const char* filemap[] = { "PortDosName", "PnPName", "DriverName",
 
 static char* get_printer_config_path(const rdpSettings* settings, const WCHAR* name, size_t length)
 {
-	char* dir = GetCombinedPath(settings->ConfigPath, "printers");
+	const char* path = settings->ConfigPath;
+	char* dir = GetCombinedPath(path, "printers");
 	char* bname = crypto_base64_encode((const BYTE*)name, (int)length);
 	char* config = GetCombinedPath(dir, bname);
 
@@ -979,7 +980,7 @@ printer_DeviceServiceEntry
 
 	device = (RDPDR_PRINTER*)pEntryPoints->device;
 	name = device->Name;
-	driver_name = device->DriverName;
+	driver_name = _strdup(device->DriverName);
 
 	/* Secondary argument is one of the following:
 	 *
@@ -1016,7 +1017,8 @@ printer_DeviceServiceEntry
 	if (!driver)
 	{
 		WLog_ERR(TAG, "Could not get a printer driver!");
-		return CHANNEL_RC_INITIALIZATION_ERROR;
+		error = CHANNEL_RC_INITIALIZATION_ERROR;
+		goto fail;
 	}
 
 	if (name && name[0])
@@ -1064,7 +1066,9 @@ printer_DeviceServiceEntry
 	}
 
 fail:
-	driver->ReleaseRef(driver);
+	free(driver_name);
+	if (driver)
+		driver->ReleaseRef(driver);
 
 	return error;
 }

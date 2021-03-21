@@ -37,6 +37,7 @@
 
 #include "xf_graphics.h"
 #include "xf_gdi.h"
+#include "xf_event.h"
 
 #include <freerdp/log.h>
 #define TAG CLIENT_TAG("x11")
@@ -124,7 +125,7 @@ static BOOL xf_Bitmap_New(rdpContext* context, rdpBitmap* bitmap)
 
 		if ((INT64)depth != xfc->depth)
 		{
-			if (!(data = _aligned_malloc(bitmap->width * bitmap->height * 4, 16)))
+			if (!(data = _aligned_malloc(bitmap->width * bitmap->height * 4ULL, 16)))
 				goto unlock;
 
 			if (!freerdp_image_copy(data, gdi->dstFormat, 0, 0, 0, bitmap->width, bitmap->height,
@@ -310,7 +311,7 @@ static BOOL _xf_Pointer_GetCursorForCurrentScale(rdpContext* context, const rdpP
 		ci.height = yTargetSize;
 		ci.xhot = pointer->xPos * xscale;
 		ci.yhot = pointer->yPos * yscale;
-		size = ci.height * ci.width * GetBytesPerPixel(CursorFormat);
+		size = ci.height * ci.width * GetBytesPerPixel(CursorFormat) * 1ULL;
 
 		tmp = _aligned_malloc(size, 16);
 		if (!tmp)
@@ -399,7 +400,7 @@ static BOOL xf_Pointer_New(rdpContext* context, rdpPointer* pointer)
 	xpointer->nCursors = 0;
 	xpointer->mCursors = 0;
 
-	size = pointer->height * pointer->width * GetBytesPerPixel(CursorFormat);
+	size = pointer->height * pointer->width * GetBytesPerPixel(CursorFormat) * 1ULL;
 
 	if (!(xpointer->cursorPixels = (XcursorPixel*)_aligned_malloc(size, 16)))
 		return FALSE;
@@ -531,6 +532,8 @@ static BOOL xf_Pointer_SetPosition(rdpContext* context, UINT32 x, UINT32 y)
 	if (xfc->remote_app && !xfc->focused)
 		return TRUE;
 
+	xf_adjust_coordinates_to_screen(xfc, &x, &y);
+
 	xf_lock_x11(xfc);
 
 	rc = XGetWindowAttributes(xfc->display, handle, &current);
@@ -551,7 +554,7 @@ static BOOL xf_Pointer_SetPosition(rdpContext* context, UINT32 x, UINT32 y)
 
 	rc = XWarpPointer(xfc->display, None, handle, 0, 0, 0, 0, x, y);
 	if (rc == 0)
-		WLog_WARN(TAG, "xf_Pointer_SetPosition: XWrapPointer==%d", rc);
+		WLog_WARN(TAG, "xf_Pointer_SetPosition: XWarpPointer==%d", rc);
 	tmp.event_mask = current.your_event_mask;
 	rc = XChangeWindowAttributes(xfc->display, handle, CWEventMask, &tmp);
 	if (rc == 0)

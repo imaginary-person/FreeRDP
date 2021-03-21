@@ -135,25 +135,43 @@ BOOL wlf_handle_pointer_buttons(freerdp* instance, const UwacPointerButtonEvent*
 
 BOOL wlf_handle_pointer_axis(freerdp* instance, const UwacPointerAxisEvent* ev)
 {
-	rdpInput* input;
-	UINT16 flags = 0;
-	int direction;
-	uint32_t step;
-	uint32_t x, y;
-
-	if (!instance || !ev || !instance->input)
+	wlfContext* context;
+	if (!instance || !instance->context || !ev)
 		return FALSE;
 
-	x = ev->x;
-	y = ev->y;
+	context = (wlfContext*)instance->context;
+	ArrayList_Add(context->events, ev);
+	return TRUE;
+}
+
+BOOL wlf_handle_pointer_axis_discrete(freerdp* instance, const UwacPointerAxisEvent* ev)
+{
+	wlfContext* context;
+	if (!instance || !instance->context || !ev)
+		return FALSE;
+
+	context = (wlfContext*)instance->context;
+	ArrayList_Add(context->events, ev);
+	return TRUE;
+}
+
+static BOOL wlf_handle_wheel(freerdp* instance, uint32_t x, uint32_t y, uint32_t axis,
+                             int32_t value)
+{
+	rdpInput* input;
+	UINT16 flags = 0;
+	int32_t direction;
+	uint32_t avalue = abs(value);
+
+	input = instance->input;
 
 	if (!wlf_scale_coordinates(instance->context, &x, &y, TRUE))
 		return FALSE;
 
 	input = instance->input;
 
-	direction = wl_fixed_to_int(ev->value);
-	switch (ev->axis)
+	direction = value;
+	switch (axis)
 	{
 		case WL_POINTER_AXIS_VERTICAL_SCROLL:
 			flags |= PTR_FLAGS_WHEEL;
@@ -176,17 +194,103 @@ BOOL wlf_handle_pointer_axis(freerdp* instance, const UwacPointerAxisEvent* ev)
 	 * positive: 0 ... 0xFF  -> slow ... fast
 	 * negative: 0 ... 0xFF  -> fast ... slow
 	 */
-	step = abs(direction);
-	if (step > 0xFF)
-		step = 0xFF;
 
-	/* Negative rotation, so count down steps from top */
-	if (flags & PTR_FLAGS_WHEEL_NEGATIVE)
-		step = 0xFF - step;
+	while (avalue > 0)
+	{
+		const uint32_t cval = avalue > 0xFF ? 0xFF : avalue;
+		uint32_t cflags = flags | cval;
+		/* Convert negative values to 9bit twos complement */
+		if (flags & PTR_FLAGS_WHEEL_NEGATIVE)
+			cflags = (flags & 0xFF00) | (0x100 - cval);
+		if (!freerdp_input_send_mouse_event(input, cflags, (UINT16)x, (UINT16)y))
+			return FALSE;
 
-	flags |= step;
+		avalue -= cval;
+	}
+	return TRUE;
+}
 
-	return freerdp_input_send_mouse_event(input, flags, (UINT16)x, (UINT16)y);
+BOOL wlf_handle_pointer_frame(freerdp* instance, const UwacPointerFrameEvent* ev)
+{
+	BOOL success = TRUE;
+	BOOL handle = FALSE;
+	size_t x;
+	wlfContext* context;
+	enum wl_pointer_axis_source source;
+
+	if (!instance || !ev || !instance->input || !instance->context)
+		return FALSE;
+
+	context = (wlfContext*)instance->context;
+
+	for (x = 0; x < ArrayList_Count(context->events); x++)
+	{
+		UwacEvent* ev = ArrayList_GetItem(context->events, x);
+		if (!ev)
+			continue;
+		if (ev->type == UWAC_EVENT_POINTER_SOURCE)
+		{
+			handle = TRUE;
+			source = ev->mouse_source.axis_source;
+		}
+	}
+
+	/* We need source events to determine how to interpret the data */
+	if (handle)
+	{
+		for (x = 0; x < ArrayList_Count(context->events); x++)
+		{
+			UwacEvent* ev = ArrayList_GetItem(context->events, x);
+			if (!ev)
+				continue;
+
+			switch (source)
+			{
+				/* If we have a mouse wheel, just use discrete data */
+				case WL_POINTER_AXIS_SOURCE_WHEEL:
+#if defined(WL_POINTER_AXIS_SOURCE_WHEEL_TILT_SINCE_VERSION)
+				case WL_POINTER_AXIS_SOURCE_WHEEL_TILT:
+#endif
+					if (ev->type == UWAC_EVENT_POINTER_AXIS_DISCRETE)
+					{
+						/* Get the number of steps, multiply by default step width of 120 */
+						int32_t val = ev->mouse_axis.value * 0x78;
+						/* No wheel event received, success! */
+						if (!wlf_handle_wheel(instance, ev->mouse_axis.x, ev->mouse_axis.y,
+						                      ev->mouse_axis.axis, val))
+							success = FALSE;
+					}
+					break;
+					/* If we have a touch pad we get actual data, scale */
+				case WL_POINTER_AXIS_SOURCE_FINGER:
+				case WL_POINTER_AXIS_SOURCE_CONTINUOUS:
+					if (ev->type == UWAC_EVENT_POINTER_AXIS)
+					{
+						double dval = wl_fixed_to_double(ev->mouse_axis.value);
+						int32_t val = dval * 0x78 / 10.0;
+						if (!wlf_handle_wheel(instance, ev->mouse_axis.x, ev->mouse_axis.y,
+						                      ev->mouse_axis.axis, val))
+							success = FALSE;
+					}
+					break;
+				default:
+					break;
+			}
+		}
+	}
+	ArrayList_Clear(context->events);
+	return success;
+}
+
+BOOL wlf_handle_pointer_source(freerdp* instance, const UwacPointerSourceEvent* ev)
+{
+	wlfContext* context;
+	if (!instance || !instance->context || !ev)
+		return FALSE;
+
+	context = (wlfContext*)instance->context;
+	ArrayList_Add(context->events, ev);
+	return TRUE;
 }
 
 BOOL wlf_handle_key(freerdp* instance, const UwacKeyEvent* ev)
@@ -208,13 +312,34 @@ BOOL wlf_handle_key(freerdp* instance, const UwacKeyEvent* ev)
 
 BOOL wlf_keyboard_enter(freerdp* instance, const UwacKeyboardEnterLeaveEvent* ev)
 {
+	if (!instance || !ev || !instance->input)
+		return FALSE;
+
+	((wlfContext*)instance->context)->focusing = TRUE;
+	return TRUE;
+}
+
+BOOL wlf_keyboard_modifiers(freerdp* instance, const UwacKeyboardModifiersEvent* ev)
+{
 	rdpInput* input;
+	uint32_t syncFlags;
 
 	if (!instance || !ev || !instance->input)
 		return FALSE;
 
 	input = instance->input;
-	return freerdp_input_send_focus_in_event(input, 0) &&
+	syncFlags = 0;
+
+	if (ev->modifiers & UWAC_MOD_CAPS_MASK)
+		syncFlags |= KBD_SYNC_CAPS_LOCK;
+	if (ev->modifiers & UWAC_MOD_NUM_MASK)
+		syncFlags |= KBD_SYNC_NUM_LOCK;
+
+	if (!((wlfContext*)instance->context)->focusing)
+		return TRUE;
+
+	((wlfContext*)instance->context)->focusing = FALSE;
+	return freerdp_input_send_focus_in_event(input, syncFlags) &&
 	       freerdp_input_send_mouse_event(input, PTR_FLAGS_MOVE, 0, 0);
 }
 

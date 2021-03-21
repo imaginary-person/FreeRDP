@@ -319,7 +319,7 @@ static UINT audin_mac_free(IAudinDevice *device)
 	return CHANNEL_RC_OK;
 }
 
-static UINT audin_mac_parse_addin_args(AudinMacDevice *device, ADDIN_ARGV *args)
+static UINT audin_mac_parse_addin_args(AudinMacDevice *device, const ADDIN_ARGV *args)
 {
 	DWORD errCode;
 	char errString[1024];
@@ -386,7 +386,7 @@ UINT freerdp_audin_client_subsystem_entry(PFREERDP_AUDIN_DEVICE_ENTRY_POINTS pEn
 {
 	DWORD errCode;
 	char errString[1024];
-	ADDIN_ARGV *args;
+	const ADDIN_ARGV *args;
 	AudinMacDevice *mac;
 	UINT error;
 	mac = (AudinMacDevice *)calloc(1, sizeof(AudinMacDevice));
@@ -420,33 +420,38 @@ UINT freerdp_audin_client_subsystem_entry(PFREERDP_AUDIN_DEVICE_ENTRY_POINTS pEn
 		goto error_out;
 	}
 
-	AVAuthorizationStatus status =
-	    [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
-	switch (status)
+#if defined(MAC_OS_X_VERSION_10_14)
+	if (@available(macOS 10.14, *))
 	{
-		case AVAuthorizationStatusAuthorized:
-			mac->isAuthorized = TRUE;
-			break;
-		case AVAuthorizationStatusNotDetermined:
-			[AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
-			                         completionHandler:^(BOOL granted) {
-				                         if (granted == YES)
-				                         {
-					                         mac->isAuthorized = TRUE;
-				                         }
-				                         else
-					                         WLog_WARN(TAG, "Microphone access denied by user");
-			                         }];
-			break;
-		case AVAuthorizationStatusRestricted:
-			WLog_WARN(TAG, "Microphone access restricted by policy");
-			break;
-		case AVAuthorizationStatusDenied:
-			WLog_WARN(TAG, "Microphone access denied by policy");
-			break;
-		default:
-			break;
+		AVAuthorizationStatus status =
+		    [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+		switch (status)
+		{
+			case AVAuthorizationStatusAuthorized:
+				mac->isAuthorized = TRUE;
+				break;
+			case AVAuthorizationStatusNotDetermined:
+				[AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
+				                         completionHandler:^(BOOL granted) {
+					                         if (granted == YES)
+					                         {
+						                         mac->isAuthorized = TRUE;
+					                         }
+					                         else
+						                         WLog_WARN(TAG, "Microphone access denied by user");
+				                         }];
+				break;
+			case AVAuthorizationStatusRestricted:
+				WLog_WARN(TAG, "Microphone access restricted by policy");
+				break;
+			case AVAuthorizationStatusDenied:
+				WLog_WARN(TAG, "Microphone access denied by policy");
+				break;
+			default:
+				break;
+		}
 	}
+#endif
 
 	return CHANNEL_RC_OK;
 error_out:
